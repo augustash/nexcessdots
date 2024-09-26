@@ -1,0 +1,224 @@
+#!/usr/bin/env bash
+################################################################################
+#
+# Bring those RabbitMQ consumers back to life.
+#
+################################################################################
+
+set -e
+IFS=$'\n\t'
+
+# -------------------------------------------------------------------------------
+# Defines read-only script variables.
+# -------------------------------------------------------------------------------
+readonly LOGFILE="${HOME}/logs/lazarus.log"
+readonly TIMESTAMP=$(date "+%Y-%m-%d %H:%M:%S")
+
+# -------------------------------------------------------------------------------
+# Sets flags which can be overridden by user input.
+# Default values are below.
+# -------------------------------------------------------------------------------
+declare DEBUG=false
+declare NOTIFY=false
+declare RESTART=false
+declare POSTMARK_TO="${POSTMARK_TO:-pmcwilliams@augustash.com;jjohnson@augustash.com}"
+declare POSTMARK_TOKEN_SERVER="${POSTMARK_TOKEN_SERVER:-4bbb03ed-5625-4276-9bf6-fcb327648307}"
+
+# -------------------------------------------------------------------------------
+# Main Program
+# -------------------------------------------------------------------------------
+_run() {
+    local process_names=(
+        "async.operations.all"
+        "catalog_website_attribute_value_sync"
+        "codegeneratorProcessor"
+        "exportProcessor"
+        "inventory.indexer.sourceItem"
+        "inventory.indexer.stock"
+        "inventory.mass.update"
+        "inventory.reservations.cleanup"
+        "inventory.reservations.update"
+        "inventory.reservations.updateSalabilityStatus"
+        "inventory.source.items.cleanup"
+        "media.content.synchronization"
+        "media.gallery.renditions.update"
+        "media.gallery.synchronization"
+        "media.storage.catalog.image.resize"
+        "product_action_attribute.update"
+        "product_action_attribute.website.update"
+        "product_alert"
+        "sales.rule.quote.trigger.recollect"
+        "sales.rule.update.coupon.usage"
+        "saveConfigProcessor"
+    )
+
+    for process_name in "${process_names[@]}"; do
+        if [[ $(pgrep -flc "queue:consumers:start ${process_name}") != 1 ]]; then
+            RESTART=true
+            printf "%s: Queue consumer '%s' is missing or running too many\n" \
+                "${TIMESTAMP}" "${process_name}" >>"${LOGFILE}"
+        fi
+    done
+
+    if [[ "${RESTART}" == true ]] || [[ $(pgrep -flc "supervisord") != 1 ]]; then
+        if pgrep -f "supervisord|queue:consumers:start" >/dev/null; then
+            printf "%s: Killing Supervisor/RabbitMQ consumers...\n" "${TIMESTAMP}" >>"${LOGFILE}"
+            pkill -f "supervisord|queue:consumers:start" >/dev/null 2>&1
+        fi
+
+        printf "%s: Restarting supervisord...\n" "${TIMESTAMP}" >>"${LOGFILE}"
+        /usr/bin/python3 "${HOME}/supervisord/supervisord" -c "${HOME}/supervisord/supervisord.conf" >/dev/null 2>&1
+    else
+        printf "%s: RabbitMQ consumers are all good!\n" "${TIMESTAMP}" >>"${LOGFILE}"
+    fi
+}
+
+# -------------------------------------------------------------------------------
+# Program Usage
+# -------------------------------------------------------------------------------
+_usage() {
+    printf "\n"
+    printf "%b\n" "\e[1mUsage:\e[0m"
+    printf "  %s [options...]\n" "lazarus.sh"
+    printf "\n"
+    printf "%b\n" "\e[1mOptions:\e[0m"
+    printf "  -d, --debug             Runs script in BASH debug mode\n"
+    printf "  -h, --help              Display this help and exit\n"
+    printf "  --notify                Send email notification on restart\n"
+    printf "  -r, --restart           Forces a restart of services\n"
+}
+
+# -------------------------------------------------------------------------------
+# Parse Program Options
+# -------------------------------------------------------------------------------
+_options() {
+    local options=()
+    local opt_string=h
+
+    # normalize options
+    # breaking -ab into -a -b when needed and --foo=bar into --foo bar
+    while (("$#")); do
+        case "${1}" in
+        # if option is of type -ab
+        -[!-]?*)
+            # loop over each character starting with the second
+            for ((i = 1; i < "${#1}"; i++)); do
+                c="${1:i:1}"
+                options+=("-${c}") # add current char to options
+                # if option takes a required argument, and it's not the last char make
+                # the rest of the string its argument
+                if [[ "${opt_string}" == *"${c}:"* && "${1:i+1}" ]]; then
+                    options+=("${1:i+1}")
+                    break
+                fi
+            done
+            ;;
+        # if option is of type --foo=bar
+        --?*=*)
+            options+=("${1%%=*}" "${1#*=}")
+            ;;
+        # add --endopts for --
+        --)
+            options+=(--endopts)
+            ;;
+        # otherwise, nothing special
+        *)
+            options+=("${1}")
+            ;;
+        esac
+        shift
+    done
+    if [[ "${#options[@]}" -ne 0 ]]; then
+        set -- "${options[@]}"
+    fi
+    unset options
+
+    # handle positional arguments
+    while [[ "${1:-}" == -?* ]]; do
+        case "${1}" in
+        -h | --help)
+            _usage >&2
+            _exit
+            ;;
+        -d | --debug)
+            DEBUG=true
+            ;;
+        --notify)
+            NOTIFY=true
+            ;;
+        -r | --restart)
+            RESTART=true
+            ;;
+        --endopts)
+            shift
+            break
+            ;;
+        *)
+            printf "\nlazarus: invalid option '%s'\n" "${1}"
+            printf "lazarus: try 'lazarus.sh --help' for more information.\n"
+            _exit
+            ;;
+        esac
+        shift
+    done
+}
+
+# -------------------------------------------------------------------------------
+# Call to exit the script.
+# -------------------------------------------------------------------------------
+_fail() {
+    _cleanup
+    if [[ "${DEBUG}" == "true" ]] || [[ "${DEBUG}" == "1" ]]; then
+        printf "\nTrapped exit in function: '%s'.\n" "${FUNCNAME[*]}"
+    else
+        printf "\nExiting.\n"
+        _exit 1
+    fi
+}
+
+# -------------------------------------------------------------------------------
+# Any actions that should be taken if the script is prematurely
+# exited. Always call this function at the top of your script.
+# -------------------------------------------------------------------------------
+_cleanup() {
+    # re-enable echoing of terminal input
+    stty echo
+    # shows the input cursor
+    tput cnorm
+    echo -n
+}
+
+# -------------------------------------------------------------------------------
+# Non-destructive exit for when script exits naturally. Add this function at
+# the end of the script.
+#
+# Arguments:
+#   $1 (optional) - Exit code (defaults to 0)
+# -------------------------------------------------------------------------------
+_exit() {
+    _cleanup
+    exit "${1:-0}"
+}
+
+################################################################################
+#
+# RUN THE SCRIPT
+# Nothing should be edited below this block.
+#
+################################################################################
+
+# trap exits with your cleanup function
+trap _fail SIGINT SIGQUIT
+trap _exit INT TERM EXIT
+
+# parse arguments passed to script
+_options "$@"
+
+# run in debug mode, if set
+[[ "${DEBUG}" == "true" ]] && set -x
+
+# main script run
+_run
+
+# clean exit
+_exit 0

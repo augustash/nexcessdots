@@ -1,0 +1,40 @@
+# see http://editorconfig.org/
+
+# top-most EditorConfig file
+root = true
+
+[*]
+charset = utf-8
+continuation_indent_size = 4
+end_of_line = lf
+ident_size = 4
+indent_style = space
+insert_final_newline = true
+tab_width = 4
+trim_trailing_whitespace = true
+
+[*.{js,sass,scss,ts}]
+continuation_indent_size = 2
+indent_size = 2
+indent_style = space
+tab_width = 2
+
+[*.json]
+indent_size = 4
+indent_style = space
+trim_trailing_whitespace = false
+
+[package.{json,lock}]
+indent_size = 2
+indent_style = space
+
+[*.md]
+indent_size = 4
+indent_style = space
+trim_trailing_whitespace = false
+
+[*.{yml,yaml}]
+continuation_indent_size = 2
+indent_size = 2
+indent_style = space
+insert_final_newline = ignore

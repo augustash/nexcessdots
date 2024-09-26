@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+
+# Nice terminal clock
+function clock() {
+    watch -t -n 1 date +%T
+}
+
+# Create a new directory and enter it
+function mkd() {
+    mkdir -p "$@" && cd "$_"
+}
+
+# Fetch external IP address
+function myip {
+    res=$(curl -s checkip.dyndns.org | grep -Eo '[0-9\.]+')
+    echo -e "Your public IP is: ${res}"
+}

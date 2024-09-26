@@ -1,0 +1,149 @@
+if empty(glob('~/.vim/autoload/plug.vim'))
+    silent execute '!curl -fLo '~/.vim/autoload/plug.vim --create-dirs  https://raw.githubusercontent.com/junegunn/vim-plug/master/plug.vim'
+    autocmd VimEnter * PlugInstall --sync | source ~/.vimrc
+endif
+
+call plug#begin('~/.vim/plugs')
+
+Plug 'airblade/vim-gitgutter'
+Plug 'altercation/vim-colors-solarized'
+Plug 'editorconfig/editorconfig-vim'
+Plug 'godlygeek/tabular'
+Plug 'nathanaelkane/vim-indent-guides'
+Plug 'tpope/vim-sensible'
+Plug 'vim-airline/vim-airline-themes'
+Plug 'vim-airline/vim-airline'
+
+call plug#end()
+
+set nocompatible
+filetype off
+syntax enable
+
+set backupdir=~/.vim/backups
+set directory=~/.vim/swaps
+set undodir=~/.vim/undos
+
+set autoindent
+set backspace=indent,eol,start
+set cpoptions+=$
+set cursorline
+set enc=utf-8
+set encoding=utf-8 nobomb
+set expandtab
+set hidden
+set history=1000
+set ignorecase
+set incsearch
+set laststatus=2
+set listchars+=eol:↴
+set listchars+=nbsp:_
+set listchars+=trail:·
+set listchars=tab:▸\
+set magic
+set matchtime=2
+set mousehide
+set noerrorbells
+set nohlsearch
+set nojoinspaces
+set nostartofline
+set nowrap
+set number
+set numberwidth=3
+set report=0
+set ruler
+set scrolloff=5
+set shiftwidth=4
+set shortmess=aAItW
+set showcmd
+set showmatch
+set showmode
+set smartcase
+set softtabstop=4
+set spelllang=en_us
+set synmaxcol=2500
+set t_Co=256
+set tabstop=4
+set ttyfast
+set undofile
+set updatetime=250
+set visualbell
+set wildignore+=*.o,*.obj,*.pyc,.git,*.bak,.svn
+set wildmenu
+set wildmode=list:longest,full
+set winminheight=0
+
+if &term =~ '^xterm'
+    let &t_SI .= "\<Esc>[3 q"
+endif
+
+set background=dark
+let g:airline_powerline_fonts = 1
+let g:solarized_visibility = "low"
+silent! colorscheme solarized
+
+nnoremap ; :
+let mapleader=","
+imap jj <ESC>                       " [jj] Quick ESC from insert mode
+nmap <leader>w :w!<cr>              " [,w] Fast saves
+map <leader>cs <Esc>:noh<CR>        " [,cs] Clear search.
+nmap <leader>ll :set list!<CR>      " Rapidly toggle 'set list'
+nmap <leader>pp :set paste!<CR>     " [,pp ] Key for paste mode
+nmap <leader>nn :set nonumber!<CR>  " [,nn ] Toggle line numbers
+nmap <Space> <PageDown>             " Page down with <Space>
+
+" source .vimrc changes
+nnoremap gsv :so $MYVIMRC<CR>
+
+" Changes up/down to move by line in editor
+nnoremap j gj
+nnoremap k gk
+vnoremap j gj
+vnoremap k gk
+
+" Switch windows with Ctrl + a movement key
+nnoremap <C-h> <C-w>h
+nnoremap <C-j> <C-w>j
+nnoremap <C-k> <C-w>k
+nnoremap <C-l> <C-w>l
+
+" Enable filetype detection
+syntax on
+if has("autocmd")
+    filetype plugin indent on
+    syntax on
+endif
+
+" Prevent colorschemes from changing background color of screen, line
+" numbers or current line
+autocmd ColorScheme * hi Normal ctermbg=NONE guibg=NONE
+autocmd ColorScheme * hi CursorLine cterm=None ctermbg=Black ctermfg=None
+autocmd ColorScheme * hi CursorLineNr ctermbg=Black ctermfg=None
+autocmd ColorScheme * hi LineNr cterm=None ctermbg=None ctermfg=DarkGray
+
+" Markdown
+if has("autocmd")
+    autocmd FileType markdown set wrap
+    autocmd FileType markdown set linebreak
+endif
+
+" Editing
+if has("autocmd")
+    " Strip trailing white space on specific files
+    autocmd BufWritePre *.php,*.phtml,*.htm,*.html,*.css,*.py,*.js :%s/\s\+$//ge
+
+    " Go back to the position the cursor was on the last time this file was edited
+    autocmd BufReadPost * if line("'\"") > 0 && line("'\"") <= line("$")|execute("normal `\"")|endif
+endif
+
+" PHP
+if has("autocmd")
+    " Highlight interpolated variables in SQL strings & SQL-syntax highlighting
+    autocmd FileType php let php_sql_query=1
+
+    " Highlight HTML inside of PHP strings
+    autocmd FileType php let php_htmlInStrings=1
+
+    " Discourages use of short tags.
+    autocmd FileType php let php_noShortTags=1
+endif

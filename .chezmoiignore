@@ -1,0 +1,11 @@
+.vim/autoload
+!.vim/autoload/.gitkeep
+.vim/backups
+!.vim/backups/.gitkeep
+.vim/plugs
+!.vim/plugs/.gitkeep
+.vim/swaps
+!.vim/swaps/.gitkeep
+.vim/undos
+!.vim/undos/.gitkeep
+README.md

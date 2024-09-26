@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+
+# helpful aliases
+
+alias ..='cd ..'
+alias ...='cd ../..'
+alias ....='cd ../../..'
+alias rebash='source ~/.bash_profile'
+
+if ls --color >/dev/null 2>&1; then
+    alias l='ls -AlhF --color --group-directories-first'
+    alias la='ls -alhF --color --group-directories-first'
+    alias ll='ls -lhFo --color --group-directories-first'
+else
+    alias l='ls -AlhF'
+    alias la='ls -alhF'
+    alias ll='ls -lhFo'
+fi
+
+if test -f "$(command -v git)"; then
+    alias g='git'
+    alias gc='git commit'
+    alias grb='git rebase'
+    alias grba='git rebase --abort'
+    alias grbc='git rebase --continue'
+    alias grst='git restore --staged'
+    alias gst='git status'
+fi
+
+alias df='df -kh'
+alias du='du -kh'
+alias free='free -m'
+alias untar='tar -zxvf'
+alias grep='grep --color=auto'
+alias kill='kill -9'
+
+alias ch='chezmoi'
+alias cq='pgrep -fla queue:consumers:start'
+alias ip="dig +short myip.opendns.com @resolver1.opendns.com"
+alias killsuper='pkill -f supervisord'
+alias kq='pkill -f queue:consumers:start'
+alias python='/usr/bin/python3'
+alias runsuper='/usr/bin/python3 ${HOME}/supervisord/supervisord -c ${HOME}/supervisord/supervisord.conf'
+alias supervisorctl='/usr/bin/python3 ${HOME}/supervisord/supervisorctl -c ${HOME}/supervisord/supervisord.conf'
+
+alias db-dump='n98 db:dump -c gzip --strip="report_viewed_product_index search_query"'
+alias redis_flushall='redis-cli -h 10.75.150.138 -p 36472 FLUSHALL'
+
+alias n98='${HOME}/.local/bin/n98-magerun2'
+alias p='cd ~/code/production/current/src'

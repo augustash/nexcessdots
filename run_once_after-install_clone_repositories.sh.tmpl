@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+
+set -eo pipefail
+
+mkdir -p ~/.cfiuam
+mkdir -p ~/.local/bin
+mkdir -p ~/.vim/{autoload,backups,plugs,swaps,undos}
+if test -f "$(command -v php)"; then
+    curl -sS https://getcomposer.org/installer | php -- --install-dir=.local/bin --filename=composer
+fi

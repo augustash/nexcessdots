@@ -1,0 +1,464 @@
+#!/usr/bin/env bash
+################################################################################
+#
+# Automatic Cloudflare IUAM Based on Server Load
+#
+################################################################################
+
+shopt -s extglob && set +o posix || exit
+
+# -------------------------------------------------------------------------------
+# Defines read-only script variables.
+# -------------------------------------------------------------------------------
+# shellcheck disable=SC2155
+readonly CF_HOME="$(cd "${HOME}" && pwd)/.cfiuam"
+# shellcheck disable=SC2155
+readonly CF_SCRIPT=$(basename "${0}")
+readonly TIME_LIMIT=$((60 * 10))
+
+# -------------------------------------------------------------------------------
+# Sets flags which can be overridden by user input.
+# Default values are below.
+# -------------------------------------------------------------------------------
+declare -a ARGS=()
+declare CF_APIKEY="${CF_APIKEY:-}"
+declare CF_ZONE="${CF_ZONE:-}"
+declare DEBUG=false
+declare LOAD_CEILING="${LOAD_CEILING:-26}"
+declare LOAD_FLOOR="${LOAD_FLOOR:-8}"
+declare QUIET=false
+
+# -------------------------------------------------------------------------------
+# Cloudflare security level ENUMS
+# -------------------------------------------------------------------------------
+declare CF_SL_OFF=0
+declare CF_SL_ESSENTIALLY_OFF=1
+declare CF_SL_LOW=2
+declare CF_SL_MEDIUM=3
+declare CF_SL_HIGH=4
+declare CF_SL_UNDER_ATTACK=5
+
+# -------------------------------------------------------------------------------
+# Defines common color codes for use in Bash script output.
+# -------------------------------------------------------------------------------
+export COLOR_BOLD="\e[1m"
+export COLOR_DIM="\e[2m"
+export COLOR_INVERT="\e[7m"
+export COLOR_RESET="\e[0m"
+export COLOR_UNDERLINE="\e[4m"
+export COLOR_BLACK="\e[30m"
+export COLOR_BLUE="\e[34m"
+export COLOR_CYAN="\e[36m"
+export COLOR_GREEN="\e[32m"
+export COLOR_MAGENTA="\e[35m"
+export COLOR_RED="\e[31m"
+export COLOR_WHITE="\e[37m"
+export COLOR_YELLOW="\e[33m"
+
+# -------------------------------------------------------------------------------
+# To never save a logfile change variable to '/dev/null'
+# -------------------------------------------------------------------------------
+declare CF_LOG="${CF_HOME}/cf.log"
+if [[ ! -f "${CF_LOG}" ]]; then
+    mkdir -p "${CF_HOME}" && touch "${CF_LOG}" && cat /dev/null >"${CF_LOG}"
+fi
+
+# -------------------------------------------------------------------------------
+# Program Usage
+# -------------------------------------------------------------------------------
+cf_usage() {
+    printf "\n"
+    printf "%b\n" "${COLOR_BOLD}Usage:${COLOR_RESET}"
+    printf "  %s [options...] <command>\n" "${CF_SCRIPT}"
+    printf "\n"
+    printf "%b\n" "${COLOR_BOLD}Options:${COLOR_RESET}"
+    printf "  -d, --debug             Runs script in BASH debug mode\n"
+    printf "  -h, --help              Display this help and exit\n"
+    printf "  -t, --trigger=<TRIGGER> Server load average upper limit\n"
+    printf "  -a, --apikey=<API>      Cloudflare API key\n"
+    printf "  -z, --zone=<ZONE>       Cloudflare Zone ID\n"
+    printf "\n"
+    printf "%b\n" "${COLOR_BOLD}Commands:${COLOR_RESET}"
+    printf "  enable                  Enable Cloudflare IUAM manually\n"
+    printf "  disable                 Disable Cloudflare IUAM manually\n"
+}
+
+# Trap Function
+# -------------------------------------------------------------------------------
+# Any actions that should be taken if the script is prematurely
+# exited. Always call this function at the top of your script.
+#
+# Arguments:
+#   $1 (required) - Error message
+# -------------------------------------------------------------------------------
+cf_fail() {
+    cf_print_message "fatal" "${1}" >&2
+    cf_exit 1
+}
+
+# Exit Function
+# -------------------------------------------------------------------------------
+# Non-destructive exit for when script exits naturally.
+# Add this function at the end of the script.
+#
+# Arguments:
+#   $1 (optional) - Exit code (defaults to 0)
+# -------------------------------------------------------------------------------
+cf_exit() {
+    exit "${1:-0}"
+}
+
+# Validate Function
+# -------------------------------------------------------------------------------
+# Checks if the required options have been set before continuing the script.
+# -------------------------------------------------------------------------------
+cf_validate() {
+    local error=false
+    local options=()
+
+    if [[ -z "${CF_APIKEY}" ]]; then
+        error=true
+        options+=("apikey")
+    fi
+
+    if [[ -z "${CF_ZONE}" ]]; then
+        error=true
+        options+=("zone")
+    fi
+
+    if [[ "${error}" == "true" ]]; then
+        cf_fail "Missing required options: ${options[*]}"
+    fi
+}
+
+# -------------------------------------------------------------------------------
+# Internal function for printing output which handles coloring and suppression.
+#
+# Arguments:
+#   $1 (required) - The type of alert to print
+#   $2 (required) - The message to be printed to STDOUT
+# -------------------------------------------------------------------------------
+cf_print_message() {
+    local alert_type="${1}"
+    local message="${2}"
+    local color
+    local reset="${COLOR_RESET}"
+
+    if [[ "${TERM}" != *xterm* ]]; then
+        # don't use colors on pipes or non-recognized terminals regardles of alert type
+        color=""
+        reset=""
+    elif [[ "${alert_type}" =~ ^(error|fatal) ]]; then
+        color="${COLOR_BOLD}${COLOR_RED}"
+    elif [[ "${alert_type}" == "warning" ]]; then
+        color="${COLOR_YELLOW}"
+    elif [[ "${alert_type}" == "info" ]]; then
+        color=""
+    elif [[ "${alert_type}" == "notice" ]]; then
+        color="${COLOR_CYAN}"
+    elif [[ "${alert_type}" == "success" ]]; then
+        color="${COLOR_GREEN}"
+    elif [[ "${alert_type}" == "debug" ]]; then
+        color="${COLOR_BOLD}${COLOR_MAGENTA}"
+    elif [[ "${alert_type}" == "input" ]]; then
+        color="${COLOR_BOLD}${COLOR_WHITE}"
+    else
+        color=""
+    fi
+
+    _write_to_screen() {
+        ("${QUIET}") &&
+            {
+                tput cuu1 # moves the cursor up one line
+                return 0
+            }
+
+        printf "%b\n" "${color}${message}${reset}"
+    }
+    _write_to_screen
+}
+
+# -------------------------------------------------------------------------------
+# Internal function for logging output.
+#
+# Arguments:
+#   $1 (required) - The message to be logged
+# -------------------------------------------------------------------------------
+cf_log() {
+    local message="${1}"
+    local timestamp
+    timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+    printf "%s - cloudflare_iuam - %s\n" "${timestamp}" "${message}" >>"${CF_LOG}"
+}
+
+# -------------------------------------------------------------------------------
+# Parse Program Options
+#
+# Arguments:
+#   $1 (required) - Passed parameters
+# -------------------------------------------------------------------------------
+cf_parse_options() {
+    OPT="${1}"
+    OPTARG=""
+    OPTSHIFT=0
+
+    if [[ "${1}" == -[!-]?* ]]; then
+        OPT=${1:0:2}
+        OPTARG=${1:2}
+    elif [[ "${1}" == --*=* ]]; then
+        OPT=${1%%=*}
+        OPTARG=${1#*=}
+    elif [[ ${2+.} ]]; then
+        OPTARG="${2}"
+        OPTSHIFT=1
+    else
+        cf_fail "No argument specified for '${1}'."
+    fi
+
+    return 0
+}
+
+# -------------------------------------------------------------------------------
+# Disable IUAM (I'm Under Attack Mode)
+# -------------------------------------------------------------------------------
+cf_iuam_disable() {
+    local response
+    local status
+
+    response=$(curl -s -X PATCH "https://api.cloudflare.com/client/v4/zones/${CF_ZONE}/settings/security_level" \
+        -H "Authorization: Bearer ${CF_APIKEY}" \
+        -H "Content-Type: application/json" \
+        --data '{"value":"medium"}')
+
+    status=$(echo "${response}" | jq -r '.success')
+
+    if [[ "${status}" == "true" ]]; then
+        date +%s >"${CF_HOME}/iuam_disabled_time"
+        cf_log "load: ${current_load} - disabled IUAM"
+        cf_print_message "success" "Cloudflare IUAM disabled successfully."
+        cf_exit 0
+    else
+        cf_fail "Cloudflare IUAM failed to disable."
+    fi
+}
+
+# -------------------------------------------------------------------------------
+# Enable IUAM (I'm Under Attack Mode)
+# -------------------------------------------------------------------------------
+cf_iuam_enable() {
+    local response
+    local status
+
+    response=$(curl -s -X PATCH "https://api.cloudflare.com/client/v4/zones/${CF_ZONE}/settings/security_level" \
+        -H "Authorization: Bearer ${CF_APIKEY}" \
+        -H "Content-Type: application/json" \
+        --data '{"value":"under_attack"}')
+
+    status=$(echo "${response}" | jq -r '.success')
+
+    if [[ "${status}" == "true" ]]; then
+        date +%s >"${CF_HOME}/iuam_enabled_time"
+        cf_log "load: ${current_load} - enabled IUAM"
+        cf_print_message "success" "Cloudflare IUAM enabled successfully."
+        cf_exit 0
+    else
+        cf_fail "Cloudflare IUAM failed to enable."
+    fi
+}
+
+# -------------------------------------------------------------------------------
+# Fetch the current server load
+# -------------------------------------------------------------------------------
+cf_get_current_load() {
+    local load_average
+    load_average=$(uptime | awk {'print $10'} | cut -d',' -f1)
+    load_average=$(echo "${load_average}/1" | bc)
+    return "${load_average}"
+}
+
+# -------------------------------------------------------------------------------
+# Fetch the current Cloudflare security level
+# -------------------------------------------------------------------------------
+cf_get_current_security_level() {
+    local response
+    local status
+
+    response=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/${CF_ZONE}/settings/security_level" \
+        -H "Authorization: Bearer ${CF_APIKEY}" \
+        -H "Content-Type: application/json" \
+        --data '{"value":"under_attack"}')
+
+    status=$(echo "${response}" | jq -r '.success')
+
+    if [[ "${status}" == "true" ]]; then
+        case "$(echo "${response}" | jq -r '.result.value')" in
+        "off")
+            return "${CF_SL_OFF}"
+            ;;
+        "essentially_off")
+            return "${CF_SL_ESSENTIALLY_OFF}"
+            ;;
+        "low")
+            return "${CF_SL_LOW}"
+            ;;
+        "medium")
+            return "${CF_SL_MEDIUM}"
+            ;;
+        "high")
+            return "${CF_SL_HIGH}"
+            ;;
+        "under_attack")
+            return "${CF_SL_UNDER_ATTACK}"
+            ;;
+        *)
+            return 100 # unknown
+            ;;
+        esac
+    else
+        cf_fail "Failed to get Cloudflare security level."
+    fi
+}
+
+# -------------------------------------------------------------------------------
+# Main Program
+#
+# Arguments:
+#   $1 (required) - Program input
+# -------------------------------------------------------------------------------
+cf_main() {
+    local current_load
+    local current_security_level
+    local current_time
+    local enabled_time
+    local time_difference
+
+    while [ "$#" -gt 0 ]; do
+        case "${1}" in
+        -a* | --apikey | --apikey=*)
+            cf_parse_options "${@:1:2}"
+            CF_APIKEY="${OPTARG}"
+            shift "${OPTSHIFT}"
+            ;;
+        -d | --debug)
+            DEBUG=true
+            ;;
+        -h | --help)
+            cf_usage >&2
+            cf_exit 0
+            ;;
+        -q | --quiet)
+            QUIET=true
+            ;;
+        -t* | --trigger | --trigger=*)
+            cf_parse_options "${@:1:2}"
+            LOAD_CEILING="${OPTARG}"
+            shift "${OPTSHIFT}"
+            ;;
+        -z* | --zone | --zone=*)
+            cf_parse_options "${@:1:2}"
+            CF_ZONE="${OPTARG}"
+            shift "${OPTSHIFT}"
+            ;;
+        enable)
+            ARGS+=("enable")
+            ;;
+        disable)
+            ARGS+=("disable")
+            ;;
+        --)
+            break
+            ;;
+        -[!-][!-]*)
+            set -- "${1:0:2}" "-${1:2}" "${@:2}"
+            continue
+            ;;
+        -?*)
+            cf_fail "Invalid option: ${1}"
+            ;;
+        *) ;;
+        esac
+        shift
+    done
+
+    # run in debug mode, if set
+    [[ "${DEBUG}" == "true" ]] && set -x
+
+    # capture load average
+    cf_get_current_load
+    current_load=$?
+
+    # reset argument array
+    set -- "${ARGS[@]:-()}"
+
+    case "${ARGS[@]}" in
+    enable)
+        cf_validate
+        cf_iuam_enable
+        ;;
+    disable)
+        cf_validate
+        cf_iuam_disable
+        ;;
+    *)
+        cf_validate
+        ;;
+    esac
+
+    cf_get_current_security_level
+    current_security_level=$?
+
+    # if IUAM is enabled
+    if [[ "${current_security_level}" == "${CF_SL_UNDER_ATTACK}" ]]; then
+        if [[ ! -f "${CF_HOME}/iuam_enabled_time" ]]; then
+            date +%s >"${CF_HOME}/iuam_enabled_time"
+        fi
+        enabled_time=$(<"${CF_HOME}/iuam_enabled_time")
+        current_time=$(date +%s)
+        time_difference=$((current_time - enabled_time))
+
+        # if time limit has not passed, do nothing
+        if [[ "${time_difference}" -lt "${TIME_LIMIT}" ]]; then
+            cf_log "load: ${current_load} - time limit not expired, waiting..."
+            cf_print_message "notice" "Time limit has not passed, no change issued."
+            cf_exit 0
+        fi
+
+        # if time limit has passed and CPU load is below trigger, disable IUAM
+        if [[ "${time_difference}" -gt "${TIME_LIMIT}" && "${current_load}" -lt "${LOAD_FLOOR}" ]]; then
+            cf_log "load: ${current_load} - load normalized, disabling IUAM"
+            cf_print_message "notice" "Server load has normalized, disabling IUAM."
+            cf_iuam_disable
+        fi
+
+        # if time limit has passed and CPU load is above trigger, wait
+        if [[ "${time_difference}" -gt "${TIME_LIMIT}" && "${current_load}" -gt "${LOAD_FLOOR}" ]]; then
+            cf_log "load: ${current_load} - not normalized, waiting..."
+            cf_print_message "notice" "Server load has not normalized, no change issued."
+            cf_exit 0
+        fi
+    fi
+
+    if [[ "${current_load}" -gt "${LOAD_CEILING}" && "${current_security_level}" != "${CF_SL_UNDER_ATTACK}" ]]; then
+        cf_print_message "notice" "Server load has triggered the limit, enabling IUAM."
+        cf_iuam_enable
+    elif [[ "${current_load}" -lt "${LOAD_FLOOR}" && "${current_security_level}" == "${CF_SL_UNDER_ATTACK}" ]]; then
+        cf_print_message "notice" "Server load has normalized, disabling IUAM."
+        cf_iuam_disable
+    else
+        cf_log "load: ${current_load} - no change required"
+        cf_print_message "notice" "No security level change required."
+    fi
+}
+
+################################################################################
+#
+# RUN THE SCRIPT
+# Nothing should be edited below this block.
+#
+################################################################################
+
+# main script run
+cf_main "$@"
+
+# clean exit
+cf_exit 0
